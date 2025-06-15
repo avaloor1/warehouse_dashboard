@@ -1,290 +1,147 @@
 import streamlit as st
-import re
 import pandas as pd
-from config import get_connection
-from wh_management_utils import run_show_command_to_df, manage_warehouse
+import snowflake_manager as sfm
 
-# Connection & cursor
-conn = get_connection()
+# UI Layout
 
-def run_query(query):
-    df = pd.read_sql(query, conn)
-    return df
+st.set_page_config(
+    page_title="Warehouse Monitoring Dashboard",
+    page_icon="❄️",
+    layout="centered",  # This makes the app use the full width of the browser
+    initial_sidebar_state="auto"
+)
 
-def run_query_single(query):
-    cur = conn.cursor()
-    cur.execute(query)
-    result = cur.fetchone()
-    cur.close()
-    return result
-
-def count_joins_in_text(query_text):
-    if query_text:
-        joins = re.findall(r'\bJOIN\b', query_text, flags=re.IGNORECASE)
-        return len(joins)
-    else:
-        return 0
-
-st.set_page_config(page_title="Warehouse Monitoring Dashboard", layout="wide")
+# Custom CSS to limit content width while still using 'wide' layout
 
 st.markdown("""
     <style>
-    .block-container { max-width: 1150px; margin: auto; padding-top: 1rem; padding-bottom: 2rem; }
+    .main .block-container {
+        max-width: 1200px;
+        min-width: 1000px;
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        margin: 0 auto;
+    }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
+
+st.title("Warehouse Monitoring Dashboard")
+
 
 st.sidebar.title(" Choose an option 🎲 ")
-section = st.sidebar.radio("", [
-    "Live Dashboard 📈",
-    "Credit Usage Overview 💰",
-    "Long-Running Queries 🏃🏻‍♀️‍➡️",
-    "Bytes Scanned & Cache Hit % 🎯",
-    "Local Spill Analysis 🫗",
-    "Remote Spill Analysis 🍾",
-    "Warehouse Load Summary 🏋🏻‍♂️",
-    "Cluster Config (Min/Max) ✨",
-    "Queued Time Analysis ⏳",
-    "Warehouse Management 🔧"
-])
+section = st.sidebar.radio("", 
+    [
+        "Live Dashboard 📈",
+        "Credit Usage Overview 💰",
+        "Long-Running Queries 🏃🏻‍♀️‍➡️",
+        "Bytes Scanned & Cache Hit % 🎯",
+        "Local Spill Analysis 🫗",
+        "Remote Spill Analysis 🍾",
+        "Warehouse Load Summary 🏋🏻‍♂️",
+        "Queued Time Analysis ⏳",
+        "Warehouse Management 🔧",
+    ]
+)
 
-# Existing sections unchanged...
+if section == "Live Dashboard 📈":
+    st.subheader("Live Warehouse Load")
+    st.dataframe(sfm.get_live_warehouse_load())
+    st.subheader("Live Queries (Running / Queued)")
+#    st.dataframe(sfm.get_live_queries())
+    df = sfm.get_live_queries()
+    st.dataframe(df)
+    if st.button("🔄 Refresh the Dashboard", type="tertiary"):
+            st.rerun()
 
-# Sections
-if section == "Credit Usage Overview 💰":
-    st.subheader("Credit Usage (Last 24H)")
-    query = """
-    SELECT
-    WAREHOUSE_NAME,
-    SUM(CREDITS_USED) AS TOTAL_CREDITS
-    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
-    GROUP BY WAREHOUSE_NAME
-    ORDER BY TOTAL_CREDITS DESC;
-    """
-    st.dataframe(run_query(query))
+elif section == "Credit Usage Overview 💰":
+    st.subheader("Warehouse Credit Usage")
+    st.dataframe(sfm.get_credit_usage())
 
 elif section == "Long-Running Queries 🏃🏻‍♀️‍➡️":
-    st.subheader("Long-Running Queries (>5 min, Last 24H)")
-    query = """
-    SELECT QUERY_ID, USER_NAME, WAREHOUSE_NAME, TOTAL_ELAPSED_TIME/60000 AS MINUTES
-    FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-    WHERE START_TIME >= DATEADD('day', -1, CURRENT_TIMESTAMP)
-      AND TOTAL_ELAPSED_TIME >= 300000
-    ORDER BY MINUTES DESC;
-    """
-    st.dataframe(run_query(query))
+    st.subheader("Long-Running Queries (>5 min)")
+    df = sfm.get_long_running_queries()
+    st.dataframe(df)
 
-    selected_query_id = st.text_input("Enter a Query ID to inspect:")
-
-    if selected_query_id:
-        detail_query = f"""
-        SELECT QUERY_TEXT
-        FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-        WHERE QUERY_ID = '{selected_query_id}'
-        """
-        result = run_query_single(detail_query)
-
+    query_id = st.text_input("Enter a Query ID to view its text:")
+    if query_id:
+        result = sfm.get_query_text_by_id(query_id)
         if result:
-            query_text = result[0]
-            join_count = count_joins_in_text(query_text)
-            st.write(f"**Estimated number of JOINs in query:** {join_count}")
-            st.text_area("Query Text", query_text, height=300)
+            st.code(result[0], language='sql')
         else:
-            st.write("Query not found or still in history ingestion window.")
+            st.warning("Query ID not found.")
 
 elif section == "Bytes Scanned & Cache Hit % 🎯":
-    st.subheader("Bytes Scanned & Cache Usage (Last 24H)")
-    query = """
-    SELECT QUERY_ID,
-       BYTES_SCANNED / 1024 / 1024 AS BYTES_SCANNED, PERCENTAGE_SCANNED_FROM_CACHE  / 1024 / 1024 AS CACHE_HIT,
-       (PERCENTAGE_SCANNED_FROM_CACHE / NULLIF(BYTES_SCANNED, 0)) * 100 AS CACHE_HIT_PERCENT
-    FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-    WHERE START_TIME >= DATEADD('day', -1, CURRENT_TIMESTAMP)
-    ORDER BY BYTES_SCANNED DESC
-    LIMIT 10;
-    """
-    st.dataframe(run_query(query))
+    st.subheader("Bytes Scanned & Cache Usage")
+    st.dataframe(sfm.get_bytes_scanned_and_cache())
 
 elif section == "Local Spill Analysis 🫗":
-    st.subheader("Top 10 Queries with Local Spill (Last 24H)")
-    query = """
-    SELECT QUERY_ID, USER_NAME, WAREHOUSE_NAME,
-           BYTES_SPILLED_TO_LOCAL_STORAGE / 1024 / 1024 AS LOCAL_SPILL
-    FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-    WHERE START_TIME >= DATEADD('day', -1, CURRENT_TIMESTAMP)
-      AND BYTES_SPILLED_TO_LOCAL_STORAGE > 0
-    ORDER BY LOCAL_SPILL DESC
-    LIMIT 10;
-    """
-    st.dataframe(run_query(query))
+    st.subheader("Local Spill (MB)")
+    st.dataframe(sfm.get_local_spill())
 
 elif section == "Remote Spill Analysis 🍾":
-    st.subheader("Top 10 Queries with Remote Spill (Last 24H)")
-    query = """
-    SELECT QUERY_ID, USER_NAME, WAREHOUSE_NAME,
-           BYTES_SPILLED_TO_REMOTE_STORAGE / 1024 / 1024 AS REMOTE_SPILL
-    FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-    WHERE START_TIME >= DATEADD('day', -1, CURRENT_TIMESTAMP)
-      AND BYTES_SPILLED_TO_REMOTE_STORAGE > 0
-    ORDER BY REMOTE_SPILL DESC
-    LIMIT 10;
-    """
-    st.dataframe(run_query(query))
+    st.subheader("Remote Spill (MB)")
+    st.dataframe(sfm.get_remote_spill())
 
 elif section == "Warehouse Load Summary 🏋🏻‍♂️":
-    st.subheader("Warehouse Load Summary (Last 24H)")
-    query = """
-    SELECT WAREHOUSE_NAME,
-           AVG(AVG_RUNNING) AS AVG_RUNNING_QUERIES,
-           AVG(AVG_QUEUED_LOAD) AS AVG_QUEUE_LOAD,
-           AVG(AVG_QUEUED_PROVISIONING) AS AVG_PROVISIONING_TIME_SECONDS,
-           AVG(AVG_RUNNING) AS AVG_RUNNING,
-           AVG(AVG_BLOCKED) AS AVG_BLOCKED_QUERIES
-    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_LOAD_HISTORY
-    WHERE START_TIME >= DATEADD('day', -1, CURRENT_TIMESTAMP)
-    GROUP BY WAREHOUSE_NAME
-    ORDER BY AVG_QUEUE_LOAD  DESC;
-    """
-    st.dataframe(run_query(query))
+    st.subheader("Warehouse Load (Last 24 hrs)")
+    st.dataframe(sfm.get_warehouse_load_summary())
 
 elif section == "Queued Time Analysis ⏳":
-    st.subheader("Warehouse Queued Time Metrics (Last 24H)")
-    query = """
-    SELECT WAREHOUSE_NAME,
-           AVG(AVG_RUNNING) AS AVG_RUNNING,
-           AVG(AVG_QUEUED_LOAD) AS AVG_QUEUE_LOAD,
-           AVG(AVG_QUEUED_PROVISIONING) AS AVG_PROVISIONING_TIME_SECONDS
-    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_LOAD_HISTORY
-    WHERE START_TIME >= DATEADD('day', -1, CURRENT_TIMESTAMP)
-    GROUP BY WAREHOUSE_NAME
-    ORDER BY AVG_QUEUE_LOAD DESC;
-    """
-    st.dataframe(run_query(query))
-
-elif section == "Cluster Config (Min/Max) ✨":
-    st.subheader("Warehouse Cluster Min/Max Settings")
-
-    cur = conn.cursor()
-    try:
-        df = run_show_command_to_df(cur, "SHOW WAREHOUSES")
-
-        df_filtered = df[["name", "min_cluster_count", "max_cluster_count", "scaling_policy", "state"]]
-        df_filtered = df_filtered.rename(columns={
-            "name": "WAREHOUSE_NAME",
-            "min_cluster_count": "MIN_CLUSTER_COUNT",
-            "max_cluster_count": "MAX_CLUSTER_COUNT",
-            "scaling_policy": "SCALING_POLICY",
-            "state": "ENABLED"
-        }).sort_values("MAX_CLUSTER_COUNT", ascending=False)
-
-        st.dataframe(df_filtered)
-
-    finally:
-        cur.close()
-
-elif section == "Live Dashboard 📈":
-    st.subheader("Live Warehouse & Query Monitoring (Last 10 min)")
-
-    # Active Warehouse State
-    st.write("### Warehouse State")
-
-    cur = conn.cursor()
-    try:
-        df_wh_state = run_show_command_to_df(cur, "SHOW WAREHOUSES")
-    finally:
-        cur.close()
-    st.dataframe(df_wh_state[['name', 'state', 'size', 'running', 'queued', 'scaling_policy']])
-
-    # Active Queries in last 10 min
-    st.write("### Active Queries (Last 10 min)")
-    query = """
-    SELECT QUERY_ID, USER_NAME, WAREHOUSE_NAME, EXECUTION_STATUS,
-           TOTAL_ELAPSED_TIME/1000 AS SECONDS_ELAPSED
-    FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
-    WHERE START_TIME >= DATEADD('minute', -10, CURRENT_TIMESTAMP)
-      AND EXECUTION_STATUS IN ('RUNNING', 'QUEUED')
-    ORDER BY START_TIME DESC;
-    """
-    st.dataframe(run_query(query))
-
-    # Warehouse Load (Last 10 min)
-    st.write("### Warehouse Load Metrics (Last 10 min)")
-    query = """
-    SELECT WAREHOUSE_NAME,
-           AVG(AVG_RUNNING) AS AVG_RUNNING,
-           AVG(AVG_QUEUED_LOAD) AS AVG_QUEUED_LOAD,
-           AVG(AVG_QUEUED_PROVISIONING) AS AVG_PROVISIONING_TIME
-    FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_LOAD_HISTORY
-    WHERE START_TIME >= DATEADD('minute', -10, CURRENT_TIMESTAMP)
-    GROUP BY WAREHOUSE_NAME
-    ORDER BY AVG_QUEUED_LOAD DESC;
-    """
-    st.dataframe(run_query(query))
-
-    if st.button("🔄 Refresh the Dashboard", type="tertiary"):
-        st.rerun()
+    st.subheader("Query Queue Time & Load (Last 24 hrs)")
+    st.dataframe(sfm.get_queued_time_analysis())
 
 elif section == "Warehouse Management 🔧":
     st.subheader("Warehouse Management Console")
 
-    # Open cursor, run SHOW WAREHOUSES, close cursor
-    cur = conn.cursor()
-    df_wh = run_show_command_to_df(cur, "SHOW WAREHOUSES")
-    cur.close()
-
-    # Display warehouse list and management actions
+    df_wh = sfm.run_show_command_to_df("SHOW WAREHOUSES")
     wh_list = df_wh["name"].tolist()
-    selected_wh = st.selectbox("Select a Warehouse", wh_list)
 
-    if selected_wh:
-        wh_details = df_wh[df_wh["name"] == selected_wh].iloc[0]
+    wh_selected = st.selectbox("Select a warehouse to manage", wh_list)
 
-        st.write(f"**Size:** {wh_details['size']}")
-        st.write(f"**State:** {wh_details['state']}")
-        st.write(f"**Auto Suspend:** {wh_details['auto_suspend']}")
-        st.write(f"**Auto Resume:** {wh_details['auto_resume']}")
-        st.write(f"**Min Clusters:** {wh_details['min_cluster_count']}")
-        st.write(f"**Max Clusters:** {wh_details['max_cluster_count']}")
+    if wh_selected:
+        wh_df = df_wh[df_wh["name"] == wh_selected].reset_index(drop=True)
+        st.dataframe(wh_df)
+       
 
-        st.markdown("---")
+#        st.write("### Warehouse Management Controls")
 
-        # Management actions
-        if st.button("Resume Warehouse 🚀"):
-            cur = conn.cursor()
-            cur.execute(f"ALTER WAREHOUSE {selected_wh} RESUME")
-            cur.close()
-            st.success(f"{selected_wh} resumed.")
+        col1, col2, col3 = st.columns(3)
 
-        if st.button("Suspend Warehouse 💤"):
-            cur = conn.cursor()
-            cur.execute(f"ALTER WAREHOUSE {selected_wh} SUSPEND")
-            cur.close()
-            st.success(f"{selected_wh} suspended.")
+        with col1:
+            if col1.button("Resume Warehouse"):
+                sfm.resume_warehouse(wh_selected)
+                st.success(f"{wh_selected} resumed.")
+                
+                
+        with col3:
+            if col3.button("Suspend Warehouse"):
+                sfm.suspend_warehouse(wh_selected)
+                st.success(f"{wh_selected} suspended.")
 
-        new_size = st.selectbox("Resize to:", ["XSMALL", "SMALL", "MEDIUM", "LARGE", "XLARGE", "XXLARGE"])
-        if st.button("Apply Resize 📏"):
-            cur = conn.cursor()
-            cur.execute(f"ALTER WAREHOUSE {selected_wh} SET WAREHOUSE_SIZE = {new_size}")
-            cur.close()
-            st.success(f"{selected_wh} resized to {new_size}.")
+        col1, col2, col3 = st.columns(3)
 
-        new_timeout = st.number_input("Auto Suspend Timeout (seconds)", min_value=60, step=60, value=int(wh_details['auto_suspend']))
-        if st.button("Update Auto Suspend ⏳"):
-            cur = conn.cursor()
-            cur.execute(f"ALTER WAREHOUSE {selected_wh} SET AUTO_SUSPEND = {int(new_timeout)}")
-            cur.close()
-            st.success(f"{selected_wh} auto_suspend timeout set to {int(new_timeout)} seconds.")
-            
+        with col2:
+            new_size = st.selectbox("Resize to", ['XSMALL', 'SMALL', 'MEDIUM', 'LARGE', 'XLARGE', 'XXLARGE'])
+            if st.button("Resize Warehouse"):
+                sfm.resize_warehouse(wh_selected, new_size)
+                st.success(f"{wh_selected} resized to {new_size}.")
 
-        new_stmt_timeout = st.number_input("Statement Timeout (seconds)", min_value=0, step=10, value=3600)
-        if st.button("Update Query Timeout 📄⏱️"):
-            cur = conn.cursor()
-            cur.execute(f"ALTER WAREHOUSE {selected_wh} SET STATEMENT_TIMEOUT_IN_SECONDS = {int(new_stmt_timeout)}")
-            cur.close()
-            st.success(f"{selected_wh} Query Timeout updated to {int(new_stmt_timeout)} seconds.")
+        col1, col2, col3 = st.columns(3)
+        
+        with col2:
+            new_auto_suspend = st.number_input("New AUTO_SUSPEND (seconds)", min_value=0, value=300, step=30)
+            if st.button("Update Auto Suspend"):
+                sfm.set_auto_suspend(wh_selected, new_auto_suspend)
+                st.success(f"{wh_selected} AUTO_SUSPEND set to {new_auto_suspend} sec.")
+                
+        col1, col2, col3 = st.columns(3)
 
+        with col2:
+            new_stmt_timeout = st.number_input("New STATEMENT_TIMEOUT_IN_SECONDS", min_value=0, value=600, step=60)
+            if st.button("Update Query Timeout"):
+                sfm.set_statement_timeout(wh_selected, new_stmt_timeout)
+                st.success(f"{wh_selected} STATEMENT_TIMEOUT_IN_SECONDS set to {new_stmt_timeout} sec.")
+                
 
-        st.markdown("---")
-        if st.button("🔄 Refresh Warehouse List"):
-            st.rerun()
-
-
+                
+st.sidebar.caption("Ads Warehouse Monitoring Dashboard")
