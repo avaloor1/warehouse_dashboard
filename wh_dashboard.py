@@ -29,7 +29,7 @@ st.title("Warehouse Monitoring Dashboard")
 
 
 st.sidebar.title(" Choose an option 🎲 ")
-section = st.sidebar.radio("", 
+section = st.sidebar.radio("",
     [
         "Live Dashboard 📈",
         "Credit Usage Overview 💰",
@@ -101,7 +101,7 @@ elif section == "Warehouse Management 🔧":
     if wh_selected:
         wh_df = df_wh[df_wh["name"] == wh_selected].reset_index(drop=True)
         st.dataframe(wh_df)
-       
+
 
 #        st.write("### Warehouse Management Controls")
 
@@ -111,8 +111,8 @@ elif section == "Warehouse Management 🔧":
             if col1.button("Resume Warehouse"):
                 sfm.resume_warehouse(wh_selected)
                 st.success(f"{wh_selected} resumed.")
-                
-                
+
+
         with col3:
             if col3.button("Suspend Warehouse"):
                 sfm.suspend_warehouse(wh_selected)
@@ -120,28 +120,28 @@ elif section == "Warehouse Management 🔧":
 
         col1, col2, col3 = st.columns(3)
 
-        with col2:
-            new_size = st.selectbox("Resize to", ['XSMALL', 'SMALL', 'MEDIUM', 'LARGE', 'XLARGE', 'XXLARGE'])
+        with col1:
+            new_size = st.selectbox("Resize the warehouse to a suitable size", ['XSMALL', 'SMALL', 'MEDIUM', 'LARGE', 'XLARGE', 'XXLARGE'])
             if st.button("Resize Warehouse"):
                 sfm.resize_warehouse(wh_selected, new_size)
                 st.success(f"{wh_selected} resized to {new_size}.")
 
-        col1, col2, col3 = st.columns(3)
-        
+        #col1, col2, col3 = st.columns(3)
+
         with col2:
-            new_auto_suspend = st.number_input("New AUTO_SUSPEND (seconds)", min_value=0, value=300, step=30)
+            new_auto_suspend = st.number_input("Enter a new auto suspend value (seconds)", min_value=0, value=300, step=30)
             if st.button("Update Auto Suspend"):
                 sfm.set_auto_suspend(wh_selected, new_auto_suspend)
                 st.success(f"{wh_selected} AUTO_SUSPEND set to {new_auto_suspend} sec.")
-                
-        col1, col2, col3 = st.columns(3)
 
-        with col2:
-            new_stmt_timeout = st.number_input("New STATEMENT_TIMEOUT_IN_SECONDS", min_value=0, value=600, step=60)
+        #col1, col2, col3 = st.columns(3)
+
+        with col3:
+            new_stmt_timeout = st.number_input("Enter a new statement timeout value (seconds)", min_value=0, value=600, step=60)
             if st.button("Update Query Timeout"):
                 sfm.set_statement_timeout(wh_selected, new_stmt_timeout)
                 st.success(f"{wh_selected} STATEMENT_TIMEOUT_IN_SECONDS set to {new_stmt_timeout} sec.")
-                
 
-                
+
+
 st.sidebar.caption("Ads Warehouse Monitoring Dashboard")
